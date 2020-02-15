@@ -5,7 +5,6 @@ import (
 	"sync"
 )
 
-var wg sync.WaitGroup
 var counter = 0
 
 type Fetcher interface {
@@ -13,110 +12,77 @@ type Fetcher interface {
 	// a slice of URLs found on that page.
 	Fetch(url string) (body string, urls []string, err error)
 }
-type KeyValue struct {
-	key   string
-	value string
+
+var searchResults = make(map[string]string)
+var mutex sync.Mutex
+
+func NewSearchResult(key string, value string) {
+	mutex.Lock()
+	searchResults[key] = value
+	mutex.Unlock()
 }
-
-var firstStart = true
-var channelsAreClosed = false
-
-// Crawl uses fetcher to recursively crawl
-// pages starting with url, to a maximum of depth.
-func Crawl(url string, depth int, fetcher Fetcher, ch chan *KeyValue, ch1 chan map[string]string, index int) {
-	fmt.Printf("Goroutine №%d started \n", index)
-	kv := new(KeyValue)
-	// TODO: Fetch URLs in parallel.
-	// TODO: Don't fetch the same URL twice.
-	// This implementation doesn't do either:
-	if depth <= 0 && !channelsAreClosed {
-		wg.Done()
+func PrintResults(results map[string]string) {
+	fmt.Println("Printing Results")
+	mutex.Lock()
+	for key, value := range results {
+		fmt.Println("Key:", key, "Value:", value)
+	}
+	mutex.Unlock()
+}
+func PrintExitStatus(index int) {
+	fmt.Printf("exit from goroutine %d \n", index)
+}
+func PrintWaiting(index int) {
+	fmt.Printf("goroutine %d is waiting \n", index)
+}
+func Crawl(url string, depth int, fetcher Fetcher, wg *sync.WaitGroup, index int) {
+	defer wg.Done()
+	defer PrintExitStatus(index)
+	if depth <= 0 {
 		return
 	}
-	records, ok1 := <-ch1
-	_, ok2 := records[url]
+	mutex.Lock()
+	_, ok1 := searchResults[url]
+	mutex.Unlock()
 	var body string
 	var urls []string
 	var err error
-	if ok1 && !ok2 {
+	if !ok1 {
 		body, urls, err = fetcher.Fetch(url)
-		kv.key = url
-		kv.value = body
-		if !channelsAreClosed {
-			ch <- kv
-		}
+		NewSearchResult(url, body)
 		if err != nil {
-			fmt.Println("Error!!!")
 			fmt.Println(err)
-			wg.Done()
 			return
 		}
 	}
-	fmt.Printf("Value has been pushed in channel ch : %s in goroutine %d\n", kv.key, index)
 	fmt.Printf("found: %s %q\n", url, body)
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(len(urls))
 	for _, u := range urls {
-		_, ok2 = records[u]
+		mutex.Lock()
+		_, ok2 := searchResults[u]
+		mutex.Unlock()
 		if !ok2 {
-			wg.Add(1)
-			go Crawl(u, depth-1, fetcher, ch, ch1, counter) //parallelize a web crawler
+			go Crawl(u, depth-1, fetcher, &waitGroup, counter) //parallelize a web crawler
 			counter++
 		} else {
 			fmt.Println("This record " + u + " exists")
+			waitGroup.Done()
 		}
 	}
-	if !firstStart {
-		defer wg.Done()
-	}
-	if firstStart {
-		firstStart = false
-		wg.Wait()
-		channelsAreClosed = true
-		fmt.Println("Goroutines just have finished their work")
-		//defer close(ch)
-		//defer close(ch1)
-		close(ch)
-		close(ch1)
-	}
+	PrintWaiting(index)
+	waitGroup.Wait()
 	return
 }
 
 func main() {
-	ch := make(chan *KeyValue)
-	var searchResults = make(map[string]string)
-	ch1 := make(chan map[string]string)
-	go Crawl("http://golang.org/", 4, fetcher, ch, ch1, counter)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go Crawl("http://golang.org/", 4, fetcher, &wg, counter)
 	counter++
-	if !channelsAreClosed {
-		ch1 <- searchResults
-	}
-	for {
-		fmt.Println("Channel is waiting")
-		var r *KeyValue
-		var ok bool
-		if !channelsAreClosed {
-			r, ok = <-ch
-		} else {
-			fmt.Println("Channel is closed")
-			return
-		}
-
-		fmt.Printf("Data has been taken from channel ch\n")
-		if ok && r != nil && r.key != "" {
-			searchResults[r.key] = r.value
-			if !channelsAreClosed /*&& wg.Wait()*/ {
-				ch1 <- searchResults
-			} else {
-				fmt.Println("Channel is closed")
-				break
-			}
-		} else {
-			if !ok {
-				fmt.Println("Channel is closed")
-				break
-			}
-		}
-
-	}
+	wg.Wait()
+	fmt.Println("Hooray, finally I waited for result of all goroutines")
+	PrintResults(searchResults)
 }
 
 // fakeFetcher is Fetcher that returns canned results.
