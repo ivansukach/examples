@@ -74,7 +74,6 @@ func Crawl(url string, depth int, fetcher Fetcher, wg *sync.WaitGroup, index int
 	waitGroup.Wait()
 	return
 }
-
 func main() {
 	var wg sync.WaitGroup
 	wg.Add(1)
